@@ -1,0 +1,76 @@
+ import pandas as pd
+ import numpy as np
+ import matplotlib.pyplot as plt
+ import seaborn as sns
+ import networkx as nx
+ from sklearn.ensemble import RandomForestClassifier, IsolationForest
+ from sklearn.model_selection import train_test_split
+ from sklearn.preprocessing import StandardScaler, OneHotEncoder
+ from sklearn.metrics import accuracy_score, classification_report
+ from tensorflow.keras.models import Sequential
+ from tensorflow.keras.layers import Dense, Dropout, Conv1D, Flatten
+ from tensorflow.keras.optimizers import Adam
+ import warnings
+ warnings.filterwarnings("ignore")
+ # 1. Load and preprocess data
+ data = pd.read_csv("C:/Users/DELL/Downloads/CloudWatch_Traffic_Web_Attack.csv")
+ data.drop_duplicates(inplace=True)
+ data['creation_time'] = pd.to_datetime(data['creation_time'])
+ data['end_time'] = pd.to_datetime(data['end_time'])
+ data['time'] = pd.to_datetime(data['time'])
+ data['src_ip_country_code'] = data['src_ip_country_code'].str.upper()
+ data['duration_seconds'] = (data['end_time'] - data['creation_time']).dt.total_seconds()
+ # 2. Feature transformation
+ scaler = StandardScaler()
+ scaled_features = scaler.fit_transform(data[['bytes_in', 'bytes_out', 'duration_seconds']])
+ scaled_df = pd.DataFrame(scaled_features, columns=['scaled_bytes_in', 'scaled_bytes_out',
+ 'scaled_duration_seconds'])
+ #encoder = OneHotEncoder(sparse=False)
+ encoder = OneHotEncoder(sparse_output=False)
+ encoded_features = encoder.fit_transform(data[['src_ip_country_code']])
+ encoded_columns = encoder.get_feature_names_out(['src_ip_country_code'])
+ encoded_df = pd.DataFrame(encoded_features, columns=encoded_columns)
+ transformed_df = pd.concat([data.reset_index(drop=True), scaled_df, encoded_df], axis=1)
+
+ # 3. Anomaly Detection using Isolation Forest
+ iso_model = IsolationForest(contamination=0.05, random_state=42)
+ isofeatures = transformed_df[['bytes_in', 'bytes_out', 'duration_seconds']]
+ transformed_df['anomaly'] = iso_model.fit_predict(isofeatures)
+ transformed_df['anomaly'] = transformed_df['anomaly'].apply(lambda x: 'Suspicious' if x == -1 else 'Normal')
+ # 4. Supervised Classification using Random Forest
+ transformed_df['is_suspicious'] = (transformed_df['detection_types'] == 'waf_rule').astype(int)
+ X = transformed_df[['bytes_in', 'bytes_out', 'duration_seconds']]
+ y = transformed_df['is_suspicious']
+ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+ rf = RandomForestClassifier(n_estimators=100, random_state=42)
+ rf.fit(X_train, y_train)
+ y_pred = rf.predict(X_test)
+ print("Random Forest Accuracy:", accuracy_score(y_test, y_pred))
+ print("Classification Report:\n", classification_report(y_test, y_pred))
+
+
+ # 5. Neural Network (MLP)
+ scaler_nn = StandardScaler()
+ X_train_scaled = scaler_nn.fit_transform(X_train)
+ X_test_scaled = scaler_nn.transform(X_test)
+ mlp_model = Sequential([
+    Dense(16, activation='relu', input_shape=(X_train_scaled.shape[1],)),
+    Dense(8, activation='relu'),
+    Dense(1, activation='sigmoid')
+ ])
+ mlp_model.compile(optimizer=Adam(), loss='binary_crossentropy', metrics=['accuracy'])
+ mlp_model.fit(X_train_scaled, y_train, epochs=10, batch_size=8, verbose=0)
+ loss, accuracy = mlp_model.evaluate(X_test_scaled, y_test)
+ print(f"MLP Neural Network Accuracy: {accuracy*100:.2f}%")
+
+ plt.figure(figsize=(10,6))
+ sns.scatterplot(x='bytes_in', y='bytes_out', hue='anomaly', data=transformed_df)
+ plt.title('Anomalies in Web Traffic')
+ plt.show()
+
+ # 6. Realtime Prediction
+ def predict_traffic(bytes_in, bytes_out, duration):
+    input_data = scaler_nn.transform([[bytes_in, bytes_out, duration]])
+    pred = mlp_model.predict(input_data)
+    return "Suspicious" if pred[0][0] > 0.5 else "Normal"
+ print("Realtime Prediction:", predict_traffic(5000, 300, 600))
